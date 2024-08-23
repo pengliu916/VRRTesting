@@ -15,16 +15,20 @@ fileprivate let pixelFormat = MTLPixelFormat.rgba16Float
 
 class Renderer: MTKView, MTKViewDelegate {
     static let shared = Renderer()
-    var param0: Float = 0.5
+    var texRTWidth = 1024
+    var texRTHeight = 1024
+    var blockSize: Int = 16
     var viewAspectRatio: CGFloat = 1.0
     
     unowned var dev: MTLDevice
     let cmdQueue: MTLCommandQueue
     var psoGFX: MTLRenderPipelineState!
+    var psoCPT: MTLComputePipelineState
     let vs: MTLFunction
     let ps: MTLFunction
     let semaphore = DispatchSemaphore(value: frameBufCnt)
     var bufConst = ConstBuf()
+    var texRT: MTLTexture
     
     private var preFrameTimeStamp: CFTimeInterval = 0.0
     private var curFrameTimeStamp: CFTimeInterval = 0.0
@@ -47,6 +51,14 @@ class Renderer: MTKView, MTKViewDelegate {
         
         vs = Renderer.makeGPUFunc(lib, name: "vs_quad")!
         ps = Renderer.makeGPUFunc(lib, name: "ps_quad")!
+        
+        guard let _pso = try? dev.makeComputePipelineState(function: Renderer.makeGPUFunc(lib, name: "cs_patternGen")!) else {fatalError("failed to make psoCPT")}
+        psoCPT = _pso
+        
+        let texDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: texRTWidth, height: texRTHeight, mipmapped: false);
+        texDesc.usage = [.shaderRead, .shaderWrite]
+        texRT = dev.makeTexture(descriptor: texDesc)!
+        bufConst.ui2texRTSize = vector_uint2(UInt32(texRTWidth), UInt32(texRTHeight))
         
         super.init(frame: CGRect(), device: dev)
         
@@ -112,7 +124,7 @@ class Renderer: MTKView, MTKViewDelegate {
         deltaTime = curFrameTimeStamp - preFrameTimeStamp
         elapsedTime = curFrameTimeStamp - startFrameTimeStamp
         
-        bufConst.fParam0 = param0
+        bufConst.uiBlockSize = uint(blockSize)
         bufConst.fTime = Float(elapsedTime)
 #if os(iOS)
         bufConst.fEDR = Float((window?.screen.potentialEDRHeadroom)!)
@@ -125,6 +137,16 @@ class Renderer: MTKView, MTKViewDelegate {
             semaphore.signal()
         }
         
+        guard let cce = cmdBuf.makeComputeCommandEncoder()
+        else {log.error("Failed to get compute encoder"); semaphore.signal(); return}
+        cce.setComputePipelineState(psoCPT)
+        cce.setTexture(texRT, index: 0)
+        cce.setBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
+        var threadPerThreadgroup = MTLSizeMake(32, 32, 1)
+        var threadPerGrid = MTLSizeMake(texRTWidth, texRTHeight, 1)
+        cce.dispatchThreads(threadPerGrid, threadsPerThreadgroup: threadPerThreadgroup)
+        cce.endEncoding()
+        
         guard let rpd = view.currentRenderPassDescriptor
         else {log.error("Failed to get view's rpd"); semaphore.signal(); return}
         
@@ -134,6 +156,7 @@ class Renderer: MTKView, MTKViewDelegate {
         rce.setRenderPipelineState(psoGFX)
         rce.setVertexBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
         rce.setFragmentBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
+        rce.setFragmentTexture(texRT, index: 0)
         rce.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         rce.endEncoding()
         

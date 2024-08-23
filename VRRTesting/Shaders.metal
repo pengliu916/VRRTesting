@@ -12,6 +12,13 @@
 
 using namespace metal;
 
+constexpr sampler smpLinear(mip_filter::linear,
+                            mag_filter::linear,
+                            min_filter::linear,
+                            s_address::clamp_to_zero,
+                            t_address::clamp_to_zero,
+                            r_address::clamp_to_zero);
+
 typedef struct
 {
     float4 f4Pos [[position]];
@@ -28,13 +35,30 @@ vertex ColorInOut vs_quad(uint uVertID [[vertex_id]],
     out.f2UV = float2(uint2(uVertID, uVertID << 1) & 2);
     out.f4Pos = float4(mix(float2(-1,1), float2(1,-1), out.f2UV), 0, 1);
     out.f4Pos.y *= cParams.fViewAspectRatio;
+    out.f4Pos.y /= float(cParams.ui2texRTSize.x) / float(cParams.ui2texRTSize.y);
     return out;
 }
 
 fragment float4 ps_quad(ColorInOut in [[stage_in]],
+                        texture2d<float, access::sample> texRT [[texture(0)]],
                         constant ConstBuf& cParams [[buffer(0)]])
 {
     if (any(in.f2UV >= 1.0)) { return 0.0;} // outside of the image, set to black
-    float3 f3Col = 0.5 + 0.5 * cos(cParams.fTime + in.f2UV.xyx + float3(0, 2, 4) * cParams.fParam0);
-    return float4(f3Col * cParams.fEDR, 1.0);
+    return texRT.sample(smpLinear, in.f2UV);
+}
+
+
+//====================================================================
+// shaders for generate the source texture
+//====================================================================
+kernel void
+cs_patternGen(texture2d<float, access::write> texRT [[texture(0)]],
+              constant ConstBuf& cb [[buffer(0)]],
+              uint3 ui3ThreadID_G [[thread_position_in_grid]])
+{
+    uint2 ui2BlockID = ui3ThreadID_G.xy / cb.uiBlockSize;
+    float fGreyLevel = 0.0;
+    if (ui2BlockID.x % 2 == ui2BlockID.y % 2)
+        fGreyLevel = 1.0;
+    texRT.write(float4(fGreyLevel), ui3ThreadID_G.xy);
 }

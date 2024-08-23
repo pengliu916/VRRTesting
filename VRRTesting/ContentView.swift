@@ -27,14 +27,15 @@ struct ContentView: View {
 }
 
 struct InterfaceView: View {
-    @State var param0: Float = 0.5
+    @State var blockSize: Float = 8
     
     var body: some View {
         HStack {
-            Slider(value: $param0, in: 0.2 ... 1.0,
-                   label: {Text(String(format: "Param0: %.2f", param0)).frame(width: 120)})
-            .onChange(of: param0) { new, old in
-                Renderer.shared.param0 = new
+            Slider(value: $blockSize, in: 2 ... 64,
+                   label: {Text(String(format: "BlockSize: %.0f", blockSize)).frame(width: 120)})
+            .onChange(of: blockSize) { new, old in
+                blockSize = round(new)
+                Renderer.shared.blockSize = Int(blockSize)
             }
         }
     }

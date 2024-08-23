@@ -22,7 +22,9 @@ struct ConstBuf {
     float fViewAspectRatio;
     float fTime;
     float fEDR;
-    float fParam0;
+    uint uiBlockSize;
+    
+    vector_uint2 ui2texRTSize;
 };
 
 #endif /* SharedHeader_h */
