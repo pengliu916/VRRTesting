@@ -23,7 +23,8 @@ class Renderer: MTKView, MTKViewDelegate {
     unowned var dev: MTLDevice
     let cmdQueue: MTLCommandQueue
     var psoGFX: MTLRenderPipelineState!
-    var psoCPT: MTLComputePipelineState
+    var psoGFX_VRR: MTLRenderPipelineState
+    var rpdVRR: MTLRenderPassDescriptor
     let vs: MTLFunction
     let ps: MTLFunction
     let semaphore = DispatchSemaphore(value: frameBufCnt)
@@ -51,14 +52,26 @@ class Renderer: MTKView, MTKViewDelegate {
         
         vs = Renderer.makeGPUFunc(lib, name: "vs_quad")!
         ps = Renderer.makeGPUFunc(lib, name: "ps_quad")!
-        
-        guard let _pso = try? dev.makeComputePipelineState(function: Renderer.makeGPUFunc(lib, name: "cs_patternGen")!) else {fatalError("failed to make psoCPT")}
-        psoCPT = _pso
+
+        let psoDesc = MTLRenderPipelineDescriptor()
+        psoDesc.label = "texRT PSO"
+        psoDesc.rasterSampleCount = 1
+        psoDesc.vertexFunction = Renderer.makeGPUFunc(lib, name: "vs_quadGen")
+        psoDesc.fragmentFunction = Renderer.makeGPUFunc(lib, name: "ps_quadGen")
+        psoDesc.colorAttachments[0].pixelFormat = pixelFormat
+        guard let pso = try? dev.makeRenderPipelineState(descriptor: psoDesc)
+        else {fatalError("Failed to create PSO \(String(describing: psoDesc.label))")}
+        psoGFX_VRR = pso
         
         let texDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: texRTWidth, height: texRTHeight, mipmapped: false);
-        texDesc.usage = [.shaderRead, .shaderWrite]
+        texDesc.usage = [.shaderRead, .renderTarget]
         texRT = dev.makeTexture(descriptor: texDesc)!
         bufConst.ui2texRTSize = vector_uint2(UInt32(texRTWidth), UInt32(texRTHeight))
+        
+        rpdVRR = MTLRenderPassDescriptor()
+        rpdVRR.colorAttachments[0].loadAction = .dontCare
+        rpdVRR.colorAttachments[0].storeAction = .store
+        rpdVRR.colorAttachments[0].texture = texRT
         
         super.init(frame: CGRect(), device: dev)
         
@@ -137,15 +150,14 @@ class Renderer: MTKView, MTKViewDelegate {
             semaphore.signal()
         }
         
-        guard let cce = cmdBuf.makeComputeCommandEncoder()
-        else {log.error("Failed to get compute encoder"); semaphore.signal(); return}
-        cce.setComputePipelineState(psoCPT)
-        cce.setTexture(texRT, index: 0)
-        cce.setBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
-        var threadPerThreadgroup = MTLSizeMake(32, 32, 1)
-        var threadPerGrid = MTLSizeMake(texRTWidth, texRTHeight, 1)
-        cce.dispatchThreads(threadPerGrid, threadsPerThreadgroup: threadPerThreadgroup)
-        cce.endEncoding()
+        guard let rceRT = cmdBuf.makeRenderCommandEncoder(descriptor: rpdVRR)
+        else {log.error("Failed to get encoder from rpdVRR"); semaphore.signal(); return}
+
+        rceRT.setRenderPipelineState(psoGFX_VRR)
+        rceRT.setVertexBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
+        rceRT.setFragmentBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
+        rceRT.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        rceRT.endEncoding()
         
         guard let rpd = view.currentRenderPassDescriptor
         else {log.error("Failed to get view's rpd"); semaphore.signal(); return}

@@ -51,14 +51,21 @@ fragment float4 ps_quad(ColorInOut in [[stage_in]],
 //====================================================================
 // shaders for generate the source texture
 //====================================================================
-kernel void
-cs_patternGen(texture2d<float, access::write> texRT [[texture(0)]],
-              constant ConstBuf& cb [[buffer(0)]],
-              uint3 ui3ThreadID_G [[thread_position_in_grid]])
+vertex ColorInOut vs_quadGen(uint uVertID [[vertex_id]],
+                             constant ConstBuf& cParams [[buffer(0)]])
 {
-    uint2 ui2BlockID = ui3ThreadID_G.xy / cb.uiBlockSize;
+    ColorInOut out;
+    out.f2UV = float2(uint2(uVertID, uVertID << 1) & 2);
+    out.f4Pos = float4(mix(float2(-1,1), float2(1,-1), out.f2UV), 0, 1);
+    return out;
+}
+
+fragment float4 ps_quadGen(ColorInOut in [[stage_in]],
+                           constant ConstBuf& cb [[buffer(0)]])
+{
+    uint2 ui2BlockID = uint2(in.f2UV * float2(cb.ui2texRTSize)) / cb.uiBlockSize;
     float fGreyLevel = 0.0;
     if (ui2BlockID.x % 2 == ui2BlockID.y % 2)
         fGreyLevel = 1.0;
-    texRT.write(float4(fGreyLevel), ui3ThreadID_G.xy);
+    return float4(fGreyLevel);
 }
