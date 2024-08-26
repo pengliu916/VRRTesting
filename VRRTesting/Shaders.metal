@@ -47,7 +47,6 @@ fragment float4 ps_quad(ColorInOut in [[stage_in]],
     return pow(texRT.sample(smpLinear, in.f2UV), 2.2);
 }
 
-
 //====================================================================
 // shaders for generate the source texture
 //====================================================================
@@ -83,4 +82,22 @@ fragment float4 ps_quadGen(ColorInOut in [[stage_in]],
     }
     
     return float4(f3Col, 1.0);
+}
+
+//====================================================================
+// tile shaders for stats
+//====================================================================
+struct ColorData {
+    float4 f4RGB [[color(0)]];
+};
+
+kernel void
+cs_tileStat(imageblock<ColorData, imageblock_layout_implicit> imgblk,
+            ushort2 us2ThreadPos_TG [[thread_position_in_threadgroup]],
+            uint2 ui2ThreadPos_G [[thread_position_in_grid]])
+{
+    ColorData data = imgblk.read(us2ThreadPos_TG);
+    data.f4RGB.gb = 0.0;
+    data.f4RGB.r = 1.0;
+    imgblk.write(data, us2ThreadPos_TG);
 }

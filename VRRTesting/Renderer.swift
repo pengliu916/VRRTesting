@@ -24,10 +24,12 @@ class Renderer: MTKView, MTKViewDelegate {
     unowned var dev: MTLDevice
     let cmdQueue: MTLCommandQueue
     var psoGFX: MTLRenderPipelineState!
+    var psoTileStat: MTLRenderPipelineState!
     var psoGFX_VRR: MTLRenderPipelineState
     var rpdRT: MTLRenderPassDescriptor
     let vs: MTLFunction
     let ps: MTLFunction
+    let cs_tile: MTLFunction
     let semaphore = DispatchSemaphore(value: frameBufCnt)
     var bufConst = ConstBuf()
     var texRT: MTLTexture
@@ -63,6 +65,7 @@ class Renderer: MTKView, MTKViewDelegate {
         
         vs = Renderer.makeGPUFunc(lib, name: "vs_quad")!
         ps = Renderer.makeGPUFunc(lib, name: "ps_quad")!
+        cs_tile = Renderer.makeGPUFunc(lib, name: "cs_tileStat")!
 
         let psoDesc = MTLRenderPipelineDescriptor()
         psoDesc.label = "texRT PSO"
@@ -165,25 +168,33 @@ class Renderer: MTKView, MTKViewDelegate {
         return bolb
     }
     
-    private func makeGFXPSO(label: String,
-                            vs: MTLFunction, ps: MTLFunction,
-                            framePixFormat: MTLPixelFormat, sampleCnt: Int) -> MTLRenderPipelineState {
+    private func makeGFXPSOs(framePixFormat: MTLPixelFormat, sampleCnt: Int) {
         let psoDesc = MTLRenderPipelineDescriptor()
-        psoDesc.label = label
+        psoDesc.label = "Quad GFX"
         psoDesc.rasterSampleCount = sampleCnt
         psoDesc.vertexFunction = vs
         psoDesc.fragmentFunction = ps
         psoDesc.colorAttachments[0].pixelFormat = framePixFormat
         guard let pso = try? dev.makeRenderPipelineState(descriptor: psoDesc)
-        else {fatalError("Failed to create PSO \(label)")}
-        log.info("PSO: \(label) created")
-        return pso
+        else {fatalError("Failed to create PSO Quad GFX")}
+        log.info("PSO: Quad GFX created")
+        psoGFX = pso
+        
+        let psoTileDesc = MTLTileRenderPipelineDescriptor()
+        psoTileDesc.label = "Quad Tile"
+        psoTileDesc.colorAttachments[0].pixelFormat = framePixFormat
+        psoTileDesc.rasterSampleCount = sampleCnt
+        psoTileDesc.tileFunction = cs_tile
+        guard let psoTile = try? dev.makeRenderPipelineState(tileDescriptor: psoTileDesc, options: .init(rawValue: 0), reflection: nil)
+        else {fatalError("Failed to create PSO Quad Tile")}
+        log.info("PSO: Quad Tile created")
+        psoTileStat = psoTile
     }
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         bufConst.fViewAspectRatio = Float(size.width/size.height)
         if psoGFX == nil {
-            psoGFX = makeGFXPSO(label: "Quad", vs: vs, ps: ps, framePixFormat: view.colorPixelFormat, sampleCnt: view.sampleCount)
+            makeGFXPSOs(framePixFormat: view.colorPixelFormat, sampleCnt: view.sampleCount)
         }
     }
     
@@ -215,6 +226,9 @@ class Renderer: MTKView, MTKViewDelegate {
         rceRT.setVertexBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
         rceRT.setFragmentBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
         rceRT.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        
+        rceRT.setRenderPipelineState(psoTileStat)
+        rceRT.dispatchThreadsPerTile(MTLSize(width: 10, height: 10, depth: 1))
         rceRT.endEncoding()
         
         guard let rpd = view.currentRenderPassDescriptor
