@@ -61,11 +61,12 @@ vertex ColorInOut vs_quadGen(uint uVertID [[vertex_id]],
 }
 
 fragment float4 ps_quadGen(ColorInOut in [[stage_in]],
-                           constant ConstBuf& cb [[buffer(0)]])
+                           constant ConstBuf& cb [[buffer(0)]],
+                           constant rasterization_rate_map_data &vrrData [[buffer(1)]])
 {
     uint2 ui2BlockID = uint2(in.f2UV * float2(cb.ui2texRTSize)) / cb.uiBlockSize;
     float fGreyLevel = 0.0;
     if (ui2BlockID.x % 2 == ui2BlockID.y % 2)
-        fGreyLevel = 1.0;
+        fGreyLevel = 0.02;
     return float4(fGreyLevel);
 }

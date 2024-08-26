@@ -24,13 +24,21 @@ class Renderer: MTKView, MTKViewDelegate {
     let cmdQueue: MTLCommandQueue
     var psoGFX: MTLRenderPipelineState!
     var psoGFX_VRR: MTLRenderPipelineState
-    var rpdVRR: MTLRenderPassDescriptor
+    var rpdRT: MTLRenderPassDescriptor
     let vs: MTLFunction
     let ps: MTLFunction
     let semaphore = DispatchSemaphore(value: frameBufCnt)
     var bufConst = ConstBuf()
     var texRT: MTLTexture
     
+    var bUseVRR = true
+    var rateMap: MTLRasterizationRateMap!
+    var rpdVRR: MTLRenderPassDescriptor!
+    var bufVRR: MTLBuffer!
+    var texVRR: MTLTexture!
+    var texVRRWidth: Int = 16
+    var texVRRHeight: Int = 16
+
     private var preFrameTimeStamp: CFTimeInterval = 0.0
     private var curFrameTimeStamp: CFTimeInterval = 0.0
     private var startFrameTimeStamp: CFTimeInterval = 0.0
@@ -42,13 +50,15 @@ class Renderer: MTKView, MTKViewDelegate {
     }
     
     private init() {
-        guard let _dev = MTLCreateSystemDefaultDevice() else {fatalError("failed to create MTLDevice")}
+        guard let _dev = MTLCreateSystemDefaultDevice() else {fatalError("Failed to create MTLDevice")}
         dev = _dev
         
-        guard let _queue = dev.makeCommandQueue() else {fatalError("failed to make queue")}
+        if !dev.supportsRasterizationRateMap(layerCount: 1) {fatalError("Current GPU doesn't support VRR")}
+        
+        guard let _queue = dev.makeCommandQueue() else {fatalError("Failed to make queue")}
         cmdQueue = _queue
 
-        guard let lib = dev.makeDefaultLibrary() else {fatalError("failed to make lib")}
+        guard let lib = dev.makeDefaultLibrary() else {fatalError("Failed to make lib")}
         
         vs = Renderer.makeGPUFunc(lib, name: "vs_quad")!
         ps = Renderer.makeGPUFunc(lib, name: "ps_quad")!
@@ -68,10 +78,10 @@ class Renderer: MTKView, MTKViewDelegate {
         texRT = dev.makeTexture(descriptor: texDesc)!
         bufConst.ui2texRTSize = vector_uint2(UInt32(texRTWidth), UInt32(texRTHeight))
         
-        rpdVRR = MTLRenderPassDescriptor()
-        rpdVRR.colorAttachments[0].loadAction = .dontCare
-        rpdVRR.colorAttachments[0].storeAction = .store
-        rpdVRR.colorAttachments[0].texture = texRT
+        rpdRT = MTLRenderPassDescriptor()
+        rpdRT.colorAttachments[0].loadAction = .dontCare
+        rpdRT.colorAttachments[0].storeAction = .store
+        rpdRT.colorAttachments[0].texture = texRT
         
         super.init(frame: CGRect(), device: dev)
         
@@ -93,6 +103,48 @@ class Renderer: MTKView, MTKViewDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(self.updateEDR), name: NSWindow.didMoveNotification, object: nil)
 #endif
         
+        createVRRResource()
+    }
+    
+    private func createVRRResource() {
+        let vrrDesc = MTLRasterizationRateMapDescriptor()
+        vrrDesc.label = "VRR Test"
+        vrrDesc.screenSize = MTLSizeMake(texRTWidth, texRTHeight, 0)
+        
+        let zoneCounts = MTLSizeMake(5, 5, 1)
+        let layerDesc = MTLRasterizationRateLayerDescriptor(sampleCount: zoneCounts)
+        layerDesc.horizontal[0] = 0.25
+        layerDesc.horizontal[1] = 0.5
+        layerDesc.horizontal[2] = 1.0
+        layerDesc.horizontal[3] = 0.5
+        layerDesc.horizontal[4] = 0.25
+        layerDesc.vertical[0] = 0.25
+        layerDesc.vertical[1] = 0.5
+        layerDesc.vertical[2] = 1.0
+        layerDesc.vertical[3] = 0.5
+        layerDesc.vertical[4] = 0.25
+        
+        vrrDesc.setLayer(layerDesc, at: 0)
+        rateMap = dev.makeRasterizationRateMap(descriptor: vrrDesc)
+        
+        let texVRRSize = rateMap.physicalSize(layer: 0)
+        let texDesc = MTLTextureDescriptor()
+        texDesc.width = texVRRSize.width
+        texDesc.height = texVRRSize.height
+        texDesc.pixelFormat = pixelFormat
+        texDesc.mipmapLevelCount = 1
+        texDesc.usage = [.renderTarget, .shaderRead]
+        texVRR = dev.makeTexture(descriptor: texDesc)
+        
+        rpdVRR = MTLRenderPassDescriptor()
+        rpdVRR.rasterizationRateMap = rateMap
+        rpdVRR.colorAttachments[0].texture = texVRR
+        rpdVRR.colorAttachments[0].loadAction = .clear
+        rpdVRR.colorAttachments[0].storeAction = .store
+        
+        let bufSize = rateMap.parameterDataSizeAndAlign
+        guard let _buf = dev.makeBuffer(length: bufSize.size, options: .storageModeShared)
+        else {fatalError("Failed to create VRR buffer")}
     }
     
 #if os(macOS)
@@ -132,6 +184,7 @@ class Renderer: MTKView, MTKViewDelegate {
     }
     
     func draw(in view: MTKView) {
+        let _useVRR = bUseVRR
         preFrameTimeStamp = curFrameTimeStamp
         curFrameTimeStamp = CACurrentMediaTime()
         deltaTime = curFrameTimeStamp - preFrameTimeStamp
@@ -150,7 +203,7 @@ class Renderer: MTKView, MTKViewDelegate {
             semaphore.signal()
         }
         
-        guard let rceRT = cmdBuf.makeRenderCommandEncoder(descriptor: rpdVRR)
+        guard let rceRT = cmdBuf.makeRenderCommandEncoder(descriptor: _useVRR ? rpdVRR : rpdRT)
         else {log.error("Failed to get encoder from rpdVRR"); semaphore.signal(); return}
 
         rceRT.setRenderPipelineState(psoGFX_VRR)
@@ -168,7 +221,8 @@ class Renderer: MTKView, MTKViewDelegate {
         rce.setRenderPipelineState(psoGFX)
         rce.setVertexBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
         rce.setFragmentBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
-        rce.setFragmentTexture(texRT, index: 0)
+        rce.setFragmentBuffer(bufVRR, offset: 0, index: 1)
+        rce.setFragmentTexture(_useVRR ? texVRR : texRT, index: 0)
         rce.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         rce.endEncoding()
         
