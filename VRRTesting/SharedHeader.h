@@ -8,6 +8,10 @@
 #ifndef SharedHeader_h
 #define SharedHeader_h
 
+#define VISUAL_None                0
+#define VISUAL_UVDelta             1
+#define VISUAL_Block               2
+
 #ifdef __METAL_VERSION__
 #define CONST constant const
 #else
@@ -22,9 +26,11 @@ struct ConstBuf {
     float fViewAspectRatio;
     float fTime;
     float fEDR;
-    uint uiBlockSize;
+    int iBlockSize;
     
-    vector_uint2 ui2texRTSize;
+    vector_int2 i2texRTSize;
+    vector_int2 i2texVRRPhysical;
+    int iVisualMode;
 };
 
 #endif /* SharedHeader_h */

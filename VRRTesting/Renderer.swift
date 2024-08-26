@@ -15,9 +15,10 @@ fileprivate let pixelFormat = MTLPixelFormat.rgba16Float
 
 class Renderer: MTKView, MTKViewDelegate {
     static let shared = Renderer()
-    var texRTWidth = 1024
-    var texRTHeight = 1024
-    var blockSize: Int = 16
+    var visualMode = VISUAL_None
+    var texRTWidth = 256
+    var texRTHeight = 256
+    var blockSize: Int32 = 16
     var viewAspectRatio: CGFloat = 1.0
     
     unowned var dev: MTLDevice
@@ -76,7 +77,7 @@ class Renderer: MTKView, MTKViewDelegate {
         let texDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: texRTWidth, height: texRTHeight, mipmapped: false);
         texDesc.usage = [.shaderRead, .renderTarget]
         texRT = dev.makeTexture(descriptor: texDesc)!
-        bufConst.ui2texRTSize = vector_uint2(UInt32(texRTWidth), UInt32(texRTHeight))
+        bufConst.i2texRTSize = vector_int2(Int32(texRTWidth), Int32(texRTHeight))
         
         rpdRT = MTLRenderPassDescriptor()
         rpdRT.colorAttachments[0].loadAction = .dontCare
@@ -111,19 +112,19 @@ class Renderer: MTKView, MTKViewDelegate {
         vrrDesc.label = "VRR Test"
         vrrDesc.screenSize = MTLSizeMake(texRTWidth, texRTHeight, 0)
         
-        let zoneCounts = MTLSizeMake(5, 5, 1)
+        let zoneCounts = MTLSizeMake(4, 4, 1)
         let layerDesc = MTLRasterizationRateLayerDescriptor(sampleCount: zoneCounts)
+        for row in 0..<zoneCounts.height {
+            layerDesc.vertical[row] = 1.0
+        }
+        for column in 0..<zoneCounts.width {
+            layerDesc.horizontal[column] = 1.0
+        }
         layerDesc.horizontal[0] = 0.25
-        layerDesc.horizontal[1] = 0.5
-        layerDesc.horizontal[2] = 1.0
-        layerDesc.horizontal[3] = 0.5
-        layerDesc.horizontal[4] = 0.25
+        layerDesc.horizontal[3] = 0.25
         layerDesc.vertical[0] = 0.25
-        layerDesc.vertical[1] = 0.5
-        layerDesc.vertical[2] = 1.0
-        layerDesc.vertical[3] = 0.5
-        layerDesc.vertical[4] = 0.25
-        
+        layerDesc.vertical[3] = 0.25
+
         vrrDesc.setLayer(layerDesc, at: 0)
         rateMap = dev.makeRasterizationRateMap(descriptor: vrrDesc)
         
@@ -136,6 +137,8 @@ class Renderer: MTKView, MTKViewDelegate {
         texDesc.usage = [.renderTarget, .shaderRead]
         texVRR = dev.makeTexture(descriptor: texDesc)
         
+        bufConst.i2texVRRPhysical = SIMD2<Int32>(Int32(texDesc.width), Int32(texDesc.height))
+        
         rpdVRR = MTLRenderPassDescriptor()
         rpdVRR.rasterizationRateMap = rateMap
         rpdVRR.colorAttachments[0].texture = texVRR
@@ -145,6 +148,7 @@ class Renderer: MTKView, MTKViewDelegate {
         let bufSize = rateMap.parameterDataSizeAndAlign
         guard let _buf = dev.makeBuffer(length: bufSize.size, options: .storageModeShared)
         else {fatalError("Failed to create VRR buffer")}
+        bufVRR = _buf
     }
     
 #if os(macOS)
@@ -190,8 +194,9 @@ class Renderer: MTKView, MTKViewDelegate {
         deltaTime = curFrameTimeStamp - preFrameTimeStamp
         elapsedTime = curFrameTimeStamp - startFrameTimeStamp
         
-        bufConst.uiBlockSize = uint(blockSize)
+        bufConst.iBlockSize = Int32(blockSize)
         bufConst.fTime = Float(elapsedTime)
+        bufConst.iVisualMode = visualMode
 #if os(iOS)
         bufConst.fEDR = Float((window?.screen.potentialEDRHeadroom)!)
 #endif

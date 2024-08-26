@@ -35,7 +35,7 @@ vertex ColorInOut vs_quad(uint uVertID [[vertex_id]],
     out.f2UV = float2(uint2(uVertID, uVertID << 1) & 2);
     out.f4Pos = float4(mix(float2(-1,1), float2(1,-1), out.f2UV), 0, 1);
     out.f4Pos.y *= cParams.fViewAspectRatio;
-    out.f4Pos.y /= float(cParams.ui2texRTSize.x) / float(cParams.ui2texRTSize.y);
+    out.f4Pos.y /= float(cParams.i2texRTSize.x) / float(cParams.i2texRTSize.y);
     return out;
 }
 
@@ -44,7 +44,7 @@ fragment float4 ps_quad(ColorInOut in [[stage_in]],
                         constant ConstBuf& cParams [[buffer(0)]])
 {
     if (any(in.f2UV >= 1.0)) { return 0.0;} // outside of the image, set to black
-    return texRT.sample(smpLinear, in.f2UV);
+    return pow(texRT.sample(smpLinear, in.f2UV), 2.2);
 }
 
 
@@ -64,9 +64,23 @@ fragment float4 ps_quadGen(ColorInOut in [[stage_in]],
                            constant ConstBuf& cb [[buffer(0)]],
                            constant rasterization_rate_map_data &vrrData [[buffer(1)]])
 {
-    uint2 ui2BlockID = uint2(in.f2UV * float2(cb.ui2texRTSize)) / cb.uiBlockSize;
-    float fGreyLevel = 0.0;
-    if (ui2BlockID.x % 2 == ui2BlockID.y % 2)
-        fGreyLevel = 0.02;
-    return float4(fGreyLevel);
+//    uint2 ui2XY = uint2(round(in.f2UV * float2(cb.i2texVRRPhysical)));
+//    rasterization_rate_map_decoder decoder(vrrData);
+//    ui2XY = decoder.map_screen_to_physical_coordinates(ui2XY, 0);
+    
+    float3 f3Col = 0.0;
+    switch (cb.iVisualMode) {
+        case VISUAL_UVDelta: {
+            float2 f2PixelPos = in.f2UV * float2(cb.i2texRTSize);
+            float2 f2Rate = float2(dfdx(f2PixelPos.x), dfdy(f2PixelPos.y));
+            f3Col.rg = f2Rate;
+        }; break;
+        case VISUAL_Block: {
+            uint2 ui2BlockID = uint2(in.f2UV * float2(cb.i2texRTSize)) / cb.iBlockSize;
+            if (ui2BlockID.x % 2 == ui2BlockID.y % 2)
+                f3Col = 0.6;
+        }
+    }
+    
+    return float4(f3Col, 1.0);
 }
