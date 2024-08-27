@@ -47,6 +47,7 @@ struct InterfaceView: View {
                     Text("None").tag(VISUAL_None)
                     Text("UVDelta").tag(VISUAL_UVDelta)
                     Text("Block").tag(VISUAL_Block)
+                    Text("RowColumn").tag(VISUAL_RowColumn)
                 }
                 .frame(width: 240)
                 .onChange(of: visualMode) {inst.visualMode = visualMode}

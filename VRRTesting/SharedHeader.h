@@ -11,6 +11,7 @@
 #define VISUAL_None                0
 #define VISUAL_UVDelta             1
 #define VISUAL_Block               2
+#define VISUAL_RowColumn           3
 
 #ifdef __METAL_VERSION__
 #define CONST constant const

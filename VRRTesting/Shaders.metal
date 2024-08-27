@@ -67,21 +67,26 @@ fragment float4 ps_quadGen(ColorInOut in [[stage_in]],
 //    rasterization_rate_map_decoder decoder(vrrData);
 //    ui2XY = decoder.map_screen_to_physical_coordinates(ui2XY, 0);
     
-    float3 f3Col = 0.0;
+    float4 f4Col = 0.0;
     switch (cb.iVisualMode) {
         case VISUAL_UVDelta: {
             float2 f2PixelPos = in.f2UV * float2(cb.i2texRTSize);
             float2 f2Rate = float2(dfdx(f2PixelPos.x), dfdy(f2PixelPos.y));
-            f3Col.rg = f2Rate;
+            f4Col.rg = f2Rate;
         }; break;
         case VISUAL_Block: {
             uint2 ui2BlockID = uint2(in.f2UV * float2(cb.i2texRTSize)) / cb.iBlockSize;
             if (ui2BlockID.x % 2 == ui2BlockID.y % 2)
-                f3Col = 0.6;
-        }
+                f4Col = 0.6;
+        }; break;
+        case VISUAL_RowColumn: {
+            float2 f2ColRow = in.f2UV * float2(cb.i2texRTSize) + 0.5;
+            float2 f2Rate = float2(dfdx(f2ColRow.x), dfdy(f2ColRow.y));
+            f4Col = float4(f2Rate, float2(f2ColRow));
+        }; break;
     }
     
-    return float4(f3Col, 1.0);
+    return float4(f4Col);
 }
 
 //====================================================================
