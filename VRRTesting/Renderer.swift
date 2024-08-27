@@ -16,23 +16,25 @@ fileprivate let pixelFormat = MTLPixelFormat.rgba16Float
 class Renderer: MTKView, MTKViewDelegate {
     static let shared = Renderer()
     var visualMode = VISUAL_None
-    var texRTWidth = 256
-    var texRTHeight = 256
+    var texRTWidth = 256 {didSet{bRecreateResouce = true}}
+    var texRTHeight = 256 {didSet{bRecreateResouce = true}}
     var blockSize: Int32 = 16
     var viewAspectRatio: CGFloat = 1.0
+    var bDebugOutput = true
+    var bRecreateResouce = true
     
     unowned var dev: MTLDevice
     let cmdQueue: MTLCommandQueue
     var psoGFX: MTLRenderPipelineState!
     var psoTileStat: MTLRenderPipelineState!
     var psoGFX_VRR: MTLRenderPipelineState
-    var rpdRT: MTLRenderPassDescriptor
+    var rpdRT: MTLRenderPassDescriptor!
     let vs: MTLFunction
     let ps: MTLFunction
     let cs_tile: MTLFunction
     let semaphore = DispatchSemaphore(value: frameBufCnt)
     var bufConst = ConstBuf()
-    var texRT: MTLTexture
+    var texRT: MTLTexture!
     
     var bUseVRR = true
     var rateMap: MTLRasterizationRateMap!
@@ -77,16 +79,6 @@ class Renderer: MTKView, MTKViewDelegate {
         else {fatalError("Failed to create PSO \(String(describing: psoDesc.label))")}
         psoGFX_VRR = pso
         
-        let texDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: texRTWidth, height: texRTHeight, mipmapped: false);
-        texDesc.usage = [.shaderRead, .renderTarget]
-        texRT = dev.makeTexture(descriptor: texDesc)!
-        bufConst.i2texRTSize = vector_int2(Int32(texRTWidth), Int32(texRTHeight))
-        
-        rpdRT = MTLRenderPassDescriptor()
-        rpdRT.colorAttachments[0].loadAction = .dontCare
-        rpdRT.colorAttachments[0].storeAction = .store
-        rpdRT.colorAttachments[0].texture = texRT
-        
         super.init(frame: CGRect(), device: dev)
         
         self.delegate = self
@@ -106,8 +98,22 @@ class Renderer: MTKView, MTKViewDelegate {
         NotificationCenter.default.addObserver(self, selector: #selector(self.updateEDR), name: NSApplication.didChangeScreenParametersNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(self.updateEDR), name: NSWindow.didMoveNotification, object: nil)
 #endif
+    }
+    
+    private func createResource() {
+        let texDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: texRTWidth, height: texRTHeight, mipmapped: false);
+        texDesc.usage = [.shaderRead, .renderTarget]
+        texRT = dev.makeTexture(descriptor: texDesc)!
+        bufConst.i2texRTSize = vector_int2(Int32(texRTWidth), Int32(texRTHeight))
+        
+        rpdRT = MTLRenderPassDescriptor()
+        rpdRT.colorAttachments[0].loadAction = .dontCare
+        rpdRT.colorAttachments[0].storeAction = .store
+        rpdRT.colorAttachments[0].texture = texRT
         
         createVRRResource()
+        bDebugOutput = true
+        bRecreateResouce = false
     }
     
     private func createVRRResource() {
@@ -139,6 +145,8 @@ class Renderer: MTKView, MTKViewDelegate {
         texDesc.mipmapLevelCount = 1
         texDesc.usage = [.renderTarget, .shaderRead]
         texVRR = dev.makeTexture(descriptor: texDesc)
+        texVRRWidth = texVRRSize.width
+        texVRRHeight = texVRRSize.height
         
         bufConst.i2texVRRPhysical = SIMD2<Int32>(Int32(texDesc.width), Int32(texDesc.height))
         
@@ -195,10 +203,14 @@ class Renderer: MTKView, MTKViewDelegate {
         bufConst.fViewAspectRatio = Float(size.width/size.height)
         if psoGFX == nil {
             makeGFXPSOs(framePixFormat: view.colorPixelFormat, sampleCnt: view.sampleCount)
+            bDebugOutput = true
         }
     }
     
     func draw(in view: MTKView) {
+        if bRecreateResouce {
+            createResource()
+        }
         let _useVRR = bUseVRR
         preFrameTimeStamp = curFrameTimeStamp
         curFrameTimeStamp = CACurrentMediaTime()
@@ -215,8 +227,13 @@ class Renderer: MTKView, MTKViewDelegate {
         _ = semaphore.wait(timeout: .distantFuture)
         guard let cmdBuf = cmdQueue.makeCommandBuffer() else {log.error("Faild to get cmdBuf"); return}
         let semaphore = semaphore
-        cmdBuf.addCompletedHandler{ cmdBuf in
+        cmdBuf.addCompletedHandler{ [weak self] cmdBuf in
             semaphore.signal()
+            guard let h = self else {return}
+            if h.bDebugOutput {
+                log.info("screen reso: \(h.texRTWidth)x\(h.texRTHeight) physical reso: \(h.texVRRWidth)x\(h.texVRRHeight)")
+                h.bDebugOutput = false
+            }
         }
         
         guard let rceRT = cmdBuf.makeRenderCommandEncoder(descriptor: _useVRR ? rpdVRR : rpdRT)
