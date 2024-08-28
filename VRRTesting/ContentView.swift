@@ -64,7 +64,7 @@ struct InterfaceView: View {
                 Slider(value: $heightBlock, in: 8 ... 16,
                        label: {Text(String(format: "RT Height: %.0f", heightBlock * 32)).frame(width: 120)})
                 .onChange(of: heightBlock) { new, old in
-                    widthBlock = round(new)
+                    heightBlock = round(new)
                     Renderer.shared.texRTHeight = Int(heightBlock * 32)
                 }
             }
