@@ -22,6 +22,7 @@ class Renderer: MTKView, MTKViewDelegate {
     var viewAspectRatio: CGFloat = 1.0
     var bDebugOutput = true
     var bRecreateResouce = true
+    let tileSize = 32
     
     unowned var dev: MTLDevice
     let cmdQueue: MTLCommandQueue
@@ -33,10 +34,16 @@ class Renderer: MTKView, MTKViewDelegate {
     let ps: MTLFunction
     let cs_tile: MTLFunction
     let semaphore = DispatchSemaphore(value: frameBufCnt)
+    let bufConstSize = MemoryLayout<ConstBuf>.size
     var bufConst = ConstBuf()
     var texRT: MTLTexture!
     
-    var bUseVRR = true
+    let tgDateSize = MemoryLayout<UInt32>.size * Int(BufOutput_ElementCnt)
+    let bufDataSize = MemoryLayout<Float>.size * Int(BufOutput_ElementCnt)
+    var bufData: MTLBuffer
+    var bufDebug: MTLBuffer
+    
+    var bUseVRR = true {didSet{bDebugOutput = true}}
     var rateMap: MTLRasterizationRateMap!
     var rpdVRR: MTLRenderPassDescriptor!
     var bufVRR: MTLBuffer!
@@ -79,6 +86,9 @@ class Renderer: MTKView, MTKViewDelegate {
         else {fatalError("Failed to create PSO \(String(describing: psoDesc.label))")}
         psoGFX_VRR = pso
         
+        bufData = dev.makeBuffer(length: bufDataSize, options: .storageModePrivate)!
+        bufDebug = dev.makeBuffer(length: bufDataSize, options: .storageModeShared)!
+
         super.init(frame: CGRect(), device: dev)
         
         self.delegate = self
@@ -110,6 +120,7 @@ class Renderer: MTKView, MTKViewDelegate {
         rpdRT.colorAttachments[0].loadAction = .dontCare
         rpdRT.colorAttachments[0].storeAction = .store
         rpdRT.colorAttachments[0].texture = texRT
+        rpdRT.threadgroupMemoryLength = tgDateSize
         
         createVRRResource()
         bDebugOutput = true
@@ -155,6 +166,7 @@ class Renderer: MTKView, MTKViewDelegate {
         rpdVRR.colorAttachments[0].texture = texVRR
         rpdVRR.colorAttachments[0].loadAction = .clear
         rpdVRR.colorAttachments[0].storeAction = .store
+        rpdVRR.threadgroupMemoryLength = tgDateSize
         
         let bufSize = rateMap.parameterDataSizeAndAlign
         guard let _buf = dev.makeBuffer(length: bufSize.size, options: .storageModeShared)
@@ -193,10 +205,19 @@ class Renderer: MTKView, MTKViewDelegate {
         psoTileDesc.colorAttachments[0].pixelFormat = framePixFormat
         psoTileDesc.rasterSampleCount = sampleCnt
         psoTileDesc.tileFunction = cs_tile
+        psoTileDesc.threadgroupSizeMatchesTileSize = true
         guard let psoTile = try? dev.makeRenderPipelineState(tileDescriptor: psoTileDesc, options: .init(rawValue: 0), reflection: nil)
         else {fatalError("Failed to create PSO Quad Tile")}
         log.info("PSO: Quad Tile created")
         psoTileStat = psoTile
+    }
+    
+    private func clearBufData(cmdBuf: MTLCommandBuffer) -> Bool {
+        guard let bce = cmdBuf.makeBlitCommandEncoder()
+        else {log.error("Failed to get blit encoder to clear bufData"); return false}
+        bce.fill(buffer: bufData, range: 0..<bufDataSize, value: 0)
+        bce.endEncoding()
+        return true
     }
     
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
@@ -225,27 +246,56 @@ class Renderer: MTKView, MTKViewDelegate {
 #endif
         
         _ = semaphore.wait(timeout: .distantFuture)
+        let bOutput = bDebugOutput
+        if bOutput {bDebugOutput = false}
         guard let cmdBuf = cmdQueue.makeCommandBuffer() else {log.error("Faild to get cmdBuf"); return}
         let semaphore = semaphore
+        
+        let screenSize = (texRT.width, texRT.height)
+        let physicalSize = _useVRR ? (texVRR.width, texVRR.height) : screenSize
+        bufConst.i2ActiveSize = vector_int2(Int32(physicalSize.0), Int32(physicalSize.1))
         cmdBuf.addCompletedHandler{ [weak self] cmdBuf in
             semaphore.signal()
             guard let h = self else {return}
-            if h.bDebugOutput {
-                log.info("screen reso: \(h.texRTWidth)x\(h.texRTHeight) physical reso: \(h.texVRRWidth)x\(h.texVRRHeight)")
-                h.bDebugOutput = false
+            if bOutput {
+                let dataOut = h.bufDebug.contents().bindMemory(to: Float.self, capacity: h.bufDebug.length)
+                let outArr = [Float](UnsafeBufferPointer(start: dataOut, count: Int(BufOutput_ElementCnt)))
+                let wScreenOut = outArr[Int(BufIDX_TotalScreenRow)]
+                let hScreenOut = outArr[Int(BufIDX_TotalScreenCol)]
+                let wPhysicalOut = outArr[Int(BufIDX_TotalPhysicalRow)]
+                let hPhysicalOut = outArr[Int(BufIDX_TotalPhysicalCol)]
+                let sumScreenOut = outArr[Int(BufIDX_SumScreenPixel)]
+                let sumPhysicalOut = outArr[Int(BufIDX_SumPhysicalPixel)]
+                let debug0 = outArr[Int(BufIDX_Debug0)]
+                let debug1 = outArr[Int(BufIDX_Debug1)]
+                let sumScreen = screenSize.0 * screenSize.1
+                let sumPhysical = physicalSize.0 * physicalSize.1
+                let strOut0 = String(format: "Deducted Screen: %.0fx%.0f(%dx%d)",
+                                     wScreenOut, hScreenOut, screenSize.0, screenSize.1)
+                let strOut1 = String(format: "Deducted Physical: %.0fx%.0f(%dx%d)",
+                                     wPhysicalOut, hPhysicalOut, physicalSize.0, physicalSize.1)
+                let strOut2 = String(format: "ScreenPixelCnt: %.0f(%d) PhysicalPixelCnt: %.0f(%d)",
+                                     sumScreenOut, sumScreen, sumPhysicalOut, sumPhysical)
+                let strOut3 = String(format: "Debug0: %.2f, Debug1: %.2f", debug0, debug1)
+                log.info("\(strOut0)\n\(strOut1)\n\(strOut2)\n\(strOut3)")
             }
         }
+        if !clearBufData(cmdBuf: cmdBuf) {semaphore.signal(); return}
         
         guard let rceRT = cmdBuf.makeRenderCommandEncoder(descriptor: _useVRR ? rpdVRR : rpdRT)
         else {log.error("Failed to get encoder from rpdVRR"); semaphore.signal(); return}
 
         rceRT.setRenderPipelineState(psoGFX_VRR)
-        rceRT.setVertexBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
-        rceRT.setFragmentBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
+        rceRT.setVertexBytes(&bufConst, length: bufConstSize, index: 0)
+        rceRT.setFragmentBytes(&bufConst, length: bufConstSize, index: 0)
         rceRT.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         
         rceRT.setRenderPipelineState(psoTileStat)
-        rceRT.dispatchThreadsPerTile(MTLSize(width: 10, height: 10, depth: 1))
+        rceRT.setTileBytes(&bufConst, length: bufConstSize, index: 0)
+        rceRT.setFragmentBuffer(bufVRR, offset: 0, index: 1)
+        rceRT.setTileBuffer(bufData, offset: 0, index: 2)
+        rceRT.setThreadgroupMemoryLength(tgDateSize, offset: 0, index: 0)
+        rceRT.dispatchThreadsPerTile(MTLSize(width: rceRT.tileWidth, height: rceRT.tileHeight, depth: 1))
         rceRT.endEncoding()
         
         guard let rpd = view.currentRenderPassDescriptor
@@ -255,12 +305,19 @@ class Renderer: MTKView, MTKViewDelegate {
         else {log.error("Failed to get encoder"); semaphore.signal(); return}
         
         rce.setRenderPipelineState(psoGFX)
-        rce.setVertexBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
-        rce.setFragmentBytes(&bufConst, length: MemoryLayout<ConstBuf>.size, index: 0)
+        rce.setVertexBytes(&bufConst, length: bufConstSize, index: 0)
+        rce.setFragmentBytes(&bufConst, length: bufConstSize, index: 0)
         rce.setFragmentBuffer(bufVRR, offset: 0, index: 1)
         rce.setFragmentTexture(_useVRR ? texVRR : texRT, index: 0)
         rce.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         rce.endEncoding()
+        
+        if bOutput {
+            guard let bce = cmdBuf.makeBlitCommandEncoder()
+            else {log.error("Failed to get blit encoder for debug output"); semaphore.signal(); return}
+            bce.copy(from: bufData, sourceOffset: 0, to: bufDebug, destinationOffset: 0, size: bufDataSize)
+            bce.endEncoding()
+        }
         
         if let drawable = view.currentDrawable {
             cmdBuf.present(drawable)

@@ -98,11 +98,34 @@ struct ColorData {
 
 kernel void
 cs_tileStat(imageblock<ColorData, imageblock_layout_implicit> imgblk,
-            ushort2 us2ThreadPos_TG [[thread_position_in_threadgroup]],
-            uint2 ui2ThreadPos_G [[thread_position_in_grid]])
+            constant ConstBuf& cb [[buffer(0)]],
+            constant rasterization_rate_map_data &vrrData [[buffer(1)]],
+            device atomic_float* afpOutput [[buffer(2)]],
+            threadgroup atomic_uint* tgauipOutput [[threadgroup(0)]],
+            ushort usThreadID_TG [[thread_index_in_threadgroup]],
+            uint2 ui2GridID [[thread_position_in_grid]])
 {
-    ColorData data = imgblk.read(us2ThreadPos_TG);
-    data.f4RGB.gb = 0.0;
-    data.f4RGB.r = 1.0;
-    imgblk.write(data, us2ThreadPos_TG);
+    bool bActive = all(ui2GridID < uint2(cb.i2ActiveSize));
+    
+    if (usThreadID_TG < BufOutput_ElementCnt)
+        atomic_store_explicit(&tgauipOutput[usThreadID_TG], 0, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    
+    // gather data in threadgroup(tile)
+    if (bActive) {
+        if (ui2GridID.y == 0) {
+            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalPhysicalRow], 1, memory_order_relaxed);
+        }
+        if (ui2GridID.x == 0) {
+            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalPhysicalCol], 1, memory_order_relaxed);
+        }
+        atomic_fetch_add_explicit(&tgauipOutput[BufIDX_SumPhysicalPixel], 1, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    
+    // gather data cross threadgroup(tile)
+    if (usThreadID_TG < BufOutput_ElementCnt) {
+        uint uiVal = atomic_load_explicit(&tgauipOutput[usThreadID_TG], memory_order_relaxed);
+        atomic_fetch_add_explicit(&afpOutput[usThreadID_TG], uiVal, memory_order_relaxed);
+    }
 }
