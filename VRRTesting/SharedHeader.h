@@ -23,7 +23,7 @@
 #define BufIDX_Debug1               7
 #define BufOutput_ElementCnt        8 // this must be multiple of 4
 
-#define AtomicUintScaler            1000
+#define AtomicUintScaler            100000
 
 #ifdef __METAL_VERSION__
 #define CONST constant const

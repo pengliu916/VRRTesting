@@ -113,9 +113,13 @@ cs_tileStat(imageblock<ColorData, imageblock_layout_implicit> imgblk,
         // compute the vrr mapping from one thread in each threadgroup
         if (usThreadID_TG == 0) {
             rasterization_rate_map_decoder decoder(vrrData);
-            tgf2pTemp[0] = decoder.map_physical_to_screen_coordinates(cb.f2DebugInput * float2(cb.i2ActiveSize));
-            atomic_store_explicit(&afpOutput[BufIDX_Debug0], tgf2pTemp[0].x, memory_order_relaxed);
-            atomic_store_explicit(&afpOutput[BufIDX_Debug1], tgf2pTemp[0].y, memory_order_relaxed);
+            tgf2pTemp[1] = decoder.map_physical_to_screen_coordinates(cb.f2DebugInput * float2(cb.i2ActiveSize));
+            atomic_store_explicit(&afpOutput[BufIDX_Debug0], tgf2pTemp[1].x, memory_order_relaxed);
+            atomic_store_explicit(&afpOutput[BufIDX_Debug1], tgf2pTemp[1].y, memory_order_relaxed);
+            
+            float2 f2Baseline = decoder.map_physical_to_screen_coordinates(float2(ui2GridID));
+            float2 f2Next = decoder.map_physical_to_screen_coordinates(float2(ui2GridID + 1));
+            tgf2pTemp[0] = f2Next - f2Baseline;
         }
         
         if (usThreadID_TG < BufOutput_ElementCnt)
@@ -125,7 +129,7 @@ cs_tileStat(imageblock<ColorData, imageblock_layout_implicit> imgblk,
         // debug visual write
         ColorData colData = imgblk.read(us2ThreadID_TG);
         float2 f2UV = float2(ui2GridID) / float2(cb.i2ActiveSize);
-        float2 f2UV_VRR = float2(tgf2pTemp[0]) / float2(cb.i2texRTSize);
+        float2 f2UV_VRR = float2(tgf2pTemp[1]) / float2(cb.i2texRTSize);
         if (distance(cb.f2DebugInput, f2UV) < 0.005) colData.f4RGB = float4(1, 0, 0, 0);
         if (distance(f2UV_VRR, f2UV) < 0.005) colData.f4RGB = float4(0, 1, 0, 0);
         imgblk.write(colData, us2ThreadID_TG);
@@ -134,18 +138,21 @@ cs_tileStat(imageblock<ColorData, imageblock_layout_implicit> imgblk,
     // gather data in threadgroup(tile)
     if (bActive) {
         if (ui2GridID.y == 0) {
-            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalPhysicalRow], 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalPhysicalRow], AtomicUintScaler, memory_order_relaxed);
+            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalScreenRow], tgf2pTemp[0].x * AtomicUintScaler, memory_order_relaxed);
         }
         if (ui2GridID.x == 0) {
-            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalPhysicalCol], 1, memory_order_relaxed);
+            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalPhysicalCol], AtomicUintScaler, memory_order_relaxed);
+            atomic_fetch_add_explicit(&tgauipOutput[BufIDX_TotalScreenCol], tgf2pTemp[0].y * AtomicUintScaler, memory_order_relaxed);
         }
-        atomic_fetch_add_explicit(&tgauipOutput[BufIDX_SumPhysicalPixel], 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&tgauipOutput[BufIDX_SumPhysicalPixel], AtomicUintScaler, memory_order_relaxed);
+        atomic_fetch_add_explicit(&tgauipOutput[BufIDX_SumScreenPixel], tgf2pTemp[0].x * tgf2pTemp[0].y * AtomicUintScaler, memory_order_relaxed);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     
     // gather data cross threadgroup(tile)
     if (usThreadID_TG < BufOutput_ElementCnt) {
-        uint uiVal = atomic_load_explicit(&tgauipOutput[usThreadID_TG], memory_order_relaxed);
-        atomic_fetch_add_explicit(&afpOutput[usThreadID_TG], uiVal, memory_order_relaxed);
+        float fVal = float(atomic_load_explicit(&tgauipOutput[usThreadID_TG], memory_order_relaxed)) / float(AtomicUintScaler);
+        atomic_fetch_add_explicit(&afpOutput[usThreadID_TG], fVal, memory_order_relaxed);
     }
 }
