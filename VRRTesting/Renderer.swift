@@ -38,6 +38,7 @@ class Renderer: MTKView, MTKViewDelegate {
     var bufConst = ConstBuf()
     var texRT: MTLTexture!
     
+    let tgTempSize = MemoryLayout<Float>.size * 4 // temp float2 for mapping rate, but must be multiple of 16 bytes
     let tgDateSize = MemoryLayout<UInt32>.size * Int(BufOutput_ElementCnt)
     let bufDataSize = MemoryLayout<Float>.size * Int(BufOutput_ElementCnt)
     var bufData: MTLBuffer
@@ -120,7 +121,7 @@ class Renderer: MTKView, MTKViewDelegate {
         rpdRT.colorAttachments[0].loadAction = .dontCare
         rpdRT.colorAttachments[0].storeAction = .store
         rpdRT.colorAttachments[0].texture = texRT
-        rpdRT.threadgroupMemoryLength = tgDateSize
+        rpdRT.threadgroupMemoryLength = tgDateSize + tgTempSize
         
         createVRRResource()
         bDebugOutput = true
@@ -166,12 +167,14 @@ class Renderer: MTKView, MTKViewDelegate {
         rpdVRR.colorAttachments[0].texture = texVRR
         rpdVRR.colorAttachments[0].loadAction = .clear
         rpdVRR.colorAttachments[0].storeAction = .store
-        rpdVRR.threadgroupMemoryLength = tgDateSize
+        rpdVRR.threadgroupMemoryLength = tgDateSize + tgTempSize
         
         let bufSize = rateMap.parameterDataSizeAndAlign
         guard let _buf = dev.makeBuffer(length: bufSize.size, options: .storageModeShared)
         else {fatalError("Failed to create VRR buffer")}
         bufVRR = _buf
+        
+        rateMap.copyParameterData(buffer: bufVRR, offset: 0)
     }
     
 #if os(macOS)
@@ -241,6 +244,7 @@ class Renderer: MTKView, MTKViewDelegate {
         bufConst.iBlockSize = Int32(blockSize)
         bufConst.fTime = Float(elapsedTime)
         bufConst.iVisualMode = visualMode
+        bufConst.bVRR = _useVRR
 #if os(iOS)
         bufConst.fEDR = Float((window?.screen.potentialEDRHeadroom)!)
 #endif
@@ -295,6 +299,7 @@ class Renderer: MTKView, MTKViewDelegate {
         rceRT.setTileBuffer(bufVRR, offset: 0, index: 1)
         rceRT.setTileBuffer(bufData, offset: 0, index: 2)
         rceRT.setThreadgroupMemoryLength(tgDateSize, offset: 0, index: 0)
+        rceRT.setThreadgroupMemoryLength(tgTempSize, offset: tgDateSize, index: 1)
         rceRT.dispatchThreadsPerTile(MTLSize(width: rceRT.tileWidth, height: rceRT.tileHeight, depth: 1))
         rceRT.endEncoding()
         

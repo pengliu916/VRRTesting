@@ -44,7 +44,10 @@ struct ConstBuf {
     vector_int2 i2texRTSize;
     vector_int2 i2texVRRPhysical;
     vector_int2 i2ActiveSize;
+    vector_float2 f2DebugInput;
+    
     int iVisualMode;
+    bool bVRR;
 };
 
 #endif /* SharedHeader_h */

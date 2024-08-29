@@ -102,14 +102,34 @@ cs_tileStat(imageblock<ColorData, imageblock_layout_implicit> imgblk,
             constant rasterization_rate_map_data &vrrData [[buffer(1)]],
             device atomic_float* afpOutput [[buffer(2)]],
             threadgroup atomic_uint* tgauipOutput [[threadgroup(0)]],
+            threadgroup float2* tgf2pTemp [[threadgroup(1)]],
             ushort usThreadID_TG [[thread_index_in_threadgroup]],
+            ushort2 us2ThreadID_TG [[thread_position_in_threadgroup]],
             uint2 ui2GridID [[thread_position_in_grid]])
 {
     bool bActive = all(ui2GridID < uint2(cb.i2ActiveSize));
     
-    if (usThreadID_TG < BufOutput_ElementCnt)
-        atomic_store_explicit(&tgauipOutput[usThreadID_TG], 0, memory_order_relaxed);
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (cb.bVRR) {
+        // compute the vrr mapping from one thread in each threadgroup
+        if (usThreadID_TG == 0) {
+            rasterization_rate_map_decoder decoder(vrrData);
+            tgf2pTemp[0] = decoder.map_physical_to_screen_coordinates(cb.f2DebugInput * float2(cb.i2ActiveSize));
+            atomic_store_explicit(&afpOutput[BufIDX_Debug0], tgf2pTemp[0].x, memory_order_relaxed);
+            atomic_store_explicit(&afpOutput[BufIDX_Debug1], tgf2pTemp[0].y, memory_order_relaxed);
+        }
+        
+        if (usThreadID_TG < BufOutput_ElementCnt)
+            atomic_store_explicit(&tgauipOutput[usThreadID_TG], 0, memory_order_relaxed);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        
+        // debug visual write
+        ColorData colData = imgblk.read(us2ThreadID_TG);
+        float2 f2UV = float2(ui2GridID) / float2(cb.i2ActiveSize);
+        float2 f2UV_VRR = float2(tgf2pTemp[0]) / float2(cb.i2texRTSize);
+        if (distance(cb.f2DebugInput, f2UV) < 0.005) colData.f4RGB = float4(1, 0, 0, 0);
+        if (distance(f2UV_VRR, f2UV) < 0.005) colData.f4RGB = float4(0, 1, 0, 0);
+        imgblk.write(colData, us2ThreadID_TG);
+    }
     
     // gather data in threadgroup(tile)
     if (bActive) {
