@@ -292,7 +292,7 @@ class Renderer: MTKView, MTKViewDelegate {
         
         rceRT.setRenderPipelineState(psoTileStat)
         rceRT.setTileBytes(&bufConst, length: bufConstSize, index: 0)
-        rceRT.setFragmentBuffer(bufVRR, offset: 0, index: 1)
+        rceRT.setTileBuffer(bufVRR, offset: 0, index: 1)
         rceRT.setTileBuffer(bufData, offset: 0, index: 2)
         rceRT.setThreadgroupMemoryLength(tgDateSize, offset: 0, index: 0)
         rceRT.dispatchThreadsPerTile(MTLSize(width: rceRT.tileWidth, height: rceRT.tileHeight, depth: 1))
